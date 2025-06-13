@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 
-const BACKEND_URL = "http://localhost:8000"; // adjust if needed
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 
 interface Message {
   role: "user" | "assistant";
