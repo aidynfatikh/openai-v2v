@@ -11,4 +11,4 @@ ENV HOST=0.0.0.0
 
 # Serve using a basic static server
 RUN npm install -g serve
-CMD ["serve", "-s", "dist", "-l", "3000"]
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
