@@ -7,8 +7,8 @@ interface Message {
   content: string;
 }
 
-const SILENCE_THRESHOLD = 0.01; // adjust: RMS below this is “silence”
-const SILENCE_DURATION = 1500; // ms of continuous silence before stopping
+const SILENCE_THRESHOLD = 0.01; // RMS threshold for silence
+const SILENCE_DURATION = 1500;   // ms of continuous silence to auto-stop
 
 const Chat: React.FC = () => {
   const [text, setText] = useState("");
@@ -26,7 +26,7 @@ const Chat: React.FC = () => {
   const silenceTimerRef = useRef<number | null>(null);
   const lastSoundTimeRef = useRef<number>(0);
 
-  // Cleanup audio context when component unmounts or recording stops
+  // Cleanup audio context
   const cleanupAudioContext = () => {
     if (analyserRef.current) {
       analyserRef.current.disconnect();
@@ -46,7 +46,7 @@ const Chat: React.FC = () => {
     }
   };
 
-  // Analyze audio for silence
+  // Silence detection
   const startSilenceDetection = (stream: MediaStream) => {
     const audioCtx = new AudioContext();
     audioContextRef.current = audioCtx;
@@ -63,7 +63,6 @@ const Chat: React.FC = () => {
     const checkSilence = () => {
       if (!analyserRef.current) return;
       analyserRef.current.getFloatTimeDomainData(dataArray);
-      // compute RMS
       let sumSquares = 0;
       for (let i = 0; i < dataArray.length; i++) {
         sumSquares += dataArray[i] * dataArray[i];
@@ -73,13 +72,11 @@ const Chat: React.FC = () => {
       if (rms > SILENCE_THRESHOLD) {
         lastSoundTimeRef.current = now;
       } else {
-        // if silence duration exceeded, stop recording
         if (now - lastSoundTimeRef.current > SILENCE_DURATION) {
-          stopRecording(); // automatic stop
+          stopRecording();
           return;
         }
       }
-      // schedule next check
       silenceTimerRef.current = window.setTimeout(checkSilence, 200);
     };
 
@@ -94,78 +91,60 @@ const Chat: React.FC = () => {
     setIsRecording(false);
   };
 
-  const handleAsk = () => {
-    const userMsg = text.trim();
-    if (!userMsg) return;
-    askWithMessage(userMsg);
-  };
-
+  // Core single-call chat: calls /chat/ endpoint
   const askWithMessage = async (userMsg: string) => {
     if (!userMsg.trim()) return;
-
     setError(null);
-    // Append user message to history
-    const newHistory = [...history, { role: "user" as "user", content: userMsg }];
-    setHistory(newHistory);
-    setText(""); // clear input
+    // append user
+    setHistory(prev => [...prev, { role: "user", content: userMsg }]);
+    setText("");
 
-    // 1. Get text reply
+    // call combined endpoint
     setIsThinkingText(true);
-    let replyText: string;
+    setIsThinkingVoice(false);
     try {
-      const resText = await fetch(`${BACKEND_URL}/chat-text/`, {
+      const res = await fetch(`${BACKEND_URL}/chat/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: userMsg,
-          history: newHistory,
+          history: history.concat({ role: "user", content: userMsg }),
           voice: "nova"
         })
       });
-      if (!resText.ok) {
-        const err = await resText.text();
-        throw new Error(err || `Status ${resText.status}`);
+      if (!res.ok) {
+        const errTxt = await res.text();
+        throw new Error(errTxt || `Status ${res.status}`);
       }
-      const dataText = await resText.json();
-      replyText = dataText.reply;
-      // Append assistant reply to history
-      setHistory(prev => [...prev, { role: "assistant", content: replyText }]);
-    } catch (e: any) {
-      console.error("chat-text error:", e);
-      setError("Error fetching text response");
-      setIsThinkingText(false);
-      return;
-    }
-    setIsThinkingText(false);
+      const data = await res.json();
+      const replyText: string = data.reply;
+      const audioBase64: string = data.audio_base64;
 
-    // 2. Get voice reply
-    setIsThinkingVoice(true);
-    try {
-      const resVoice = await fetch(`${BACKEND_URL}/chat-voice/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: userMsg,
-          history: newHistory,
-          voice: "nova"
-        })
-      });
-      if (!resVoice.ok) {
-        const err = await resVoice.text();
-        throw new Error(err || `Status ${resVoice.status}`);
+      setHistory(prev => [...prev, { role: "assistant", content: replyText }]);
+      setIsThinkingText(false);
+
+      if (audioBase64) {
+        setIsThinkingVoice(true);
+        const audioBlob = new Blob([
+          Uint8Array.from(atob(audioBase64), c => c.charCodeAt(0))
+        ], { type: "audio/mpeg" });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        audio.onended = () => setIsThinkingVoice(false);
+        audio.play();
       }
-      const blob = await resVoice.blob();
-      const audioUrl = URL.createObjectURL(blob);
-      const audio = new Audio(audioUrl);
-      audio.onended = () => {
-        setIsThinkingVoice(false);
-      };
-      audio.play();
     } catch (e: any) {
-      console.error("chat-voice error:", e);
-      setError("Error fetching voice response");
+      console.error("chat error:", e);
+      setError("Error during chat");
+      setIsThinkingText(false);
       setIsThinkingVoice(false);
     }
+  };
+
+  const handleAskClick = () => {
+    const msg = text.trim();
+    if (!msg) return;
+    askWithMessage(msg);
   };
 
   const handleRecordToggle = async () => {
@@ -177,7 +156,6 @@ const Chat: React.FC = () => {
       chunksRef.current = [];
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        // Start silence detection
         startSilenceDetection(stream);
 
         const mediaRecorder = new MediaRecorder(stream);
@@ -192,9 +170,7 @@ const Chat: React.FC = () => {
         mediaRecorder.onstop = async () => {
           cleanupAudioContext();
           setIsRecording(false);
-          // assemble blob
           const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-          // send to /transcribe/
           const formData = new FormData();
           formData.append("file", blob, "voice.webm");
           try {
@@ -210,10 +186,9 @@ const Chat: React.FC = () => {
             if (data.transcript) {
               const transcript: string = data.transcript;
               setText(transcript);
-              // Auto-send the transcript:
               await askWithMessage(transcript);
             } else {
-              throw new Error("No transcript in response");
+              throw new Error("No transcript");
             }
           } catch (e: any) {
             console.error("Transcription error:", e);
@@ -231,12 +206,10 @@ const Chat: React.FC = () => {
     }
   };
 
-  // Cleanup if component unmounts while recording
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (isRecording) {
-        stopRecording();
-      }
+      if (isRecording) stopRecording();
     };
   }, [isRecording]);
 
@@ -280,7 +253,7 @@ const Chat: React.FC = () => {
         </button>
 
         <button
-          onClick={handleAsk}
+          onClick={handleAskClick}
           disabled={isThinkingText || isThinkingVoice || !text.trim() || isRecording}
           style={{
             ...styles.button,
@@ -301,7 +274,7 @@ const Chat: React.FC = () => {
       {(isThinkingText || isThinkingVoice) && (
         <div style={styles.spinner}>
           {isThinkingText
-            ? "🤖 AI is generating text..."
+            ? "🤖 Generating text..."
             : "🔊 Generating voice..."}
         </div>
       )}
