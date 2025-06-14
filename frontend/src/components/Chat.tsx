@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+const BACKEND_URL = import.meta.env.VITE_API_URL;
+console.log("Backend URL:", BACKEND_URL);
 
 interface Message {
   role: "user" | "assistant";
@@ -8,7 +9,7 @@ interface Message {
 }
 
 const SILENCE_THRESHOLD = 0.01; // RMS threshold for silence
-const SILENCE_DURATION = 1500;   // ms of continuous silence to auto-stop
+const SILENCE_DURATION = 1500; // ms of continuous silence to auto-stop
 
 const Chat: React.FC = () => {
   const [text, setText] = useState("");
@@ -84,7 +85,10 @@ const Chat: React.FC = () => {
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
       mediaRecorderRef.current.stop();
     }
     cleanupAudioContext();
@@ -96,7 +100,7 @@ const Chat: React.FC = () => {
     if (!userMsg.trim()) return;
     setError(null);
     // append user
-    setHistory(prev => [...prev, { role: "user", content: userMsg }]);
+    setHistory((prev) => [...prev, { role: "user", content: userMsg }]);
     setText("");
 
     // call combined endpoint
@@ -109,8 +113,8 @@ const Chat: React.FC = () => {
         body: JSON.stringify({
           text: userMsg,
           history: history.concat({ role: "user", content: userMsg }),
-          voice: "nova"
-        })
+          voice: "nova",
+        }),
       });
       if (!res.ok) {
         const errTxt = await res.text();
@@ -120,14 +124,18 @@ const Chat: React.FC = () => {
       const replyText: string = data.reply;
       const audioBase64: string = data.audio_base64;
 
-      setHistory(prev => [...prev, { role: "assistant", content: replyText }]);
+      setHistory((prev) => [
+        ...prev,
+        { role: "assistant", content: replyText },
+      ]);
       setIsThinkingText(false);
 
       if (audioBase64) {
         setIsThinkingVoice(true);
-        const audioBlob = new Blob([
-          Uint8Array.from(atob(audioBase64), c => c.charCodeAt(0))
-        ], { type: "audio/mpeg" });
+        const audioBlob = new Blob(
+          [Uint8Array.from(atob(audioBase64), (c) => c.charCodeAt(0))],
+          { type: "audio/mpeg" }
+        );
         const audioUrl = URL.createObjectURL(audioBlob);
         const audio = new Audio(audioUrl);
         audio.onended = () => setIsThinkingVoice(false);
@@ -155,7 +163,9 @@ const Chat: React.FC = () => {
       setIsRecording(true);
       chunksRef.current = [];
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+        });
         startSilenceDetection(stream);
 
         const mediaRecorder = new MediaRecorder(stream);
@@ -176,7 +186,7 @@ const Chat: React.FC = () => {
           try {
             const res = await fetch(`${BACKEND_URL}/transcribe/`, {
               method: "POST",
-              body: formData
+              body: formData,
             });
             if (!res.ok) {
               const err = await res.text();
@@ -212,6 +222,10 @@ const Chat: React.FC = () => {
       if (isRecording) stopRecording();
     };
   }, [isRecording]);
+
+  useEffect(() => {
+    console.log("Current BACKEND_URL:", BACKEND_URL);
+  }, []);
 
   return (
     <div style={styles.container}>
@@ -254,7 +268,9 @@ const Chat: React.FC = () => {
 
         <button
           onClick={handleAskClick}
-          disabled={isThinkingText || isThinkingVoice || !text.trim() || isRecording}
+          disabled={
+            isThinkingText || isThinkingVoice || !text.trim() || isRecording
+          }
           style={{
             ...styles.button,
             backgroundColor:
@@ -273,9 +289,7 @@ const Chat: React.FC = () => {
 
       {(isThinkingText || isThinkingVoice) && (
         <div style={styles.spinner}>
-          {isThinkingText
-            ? "🤖 Generating text..."
-            : "🔊 Generating voice..."}
+          {isThinkingText ? "🤖 Generating text..." : "🔊 Generating voice..."}
         </div>
       )}
     </div>
